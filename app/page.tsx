@@ -6,6 +6,8 @@ type Status = "idle" | "generating" | "done" | "error";
 
 export default function Home() {
   const [apiKey, setApiKey] = useState("");
+  const [showApiKey, setShowApiKey] = useState(false);
+  const [platform, setPlatform] = useState<"replicate" | "magic-hour">("replicate");
   const [model, setModel] = useState("pixverse/pixverse-v6");
   const [script, setScript] = useState("");
   const [status, setStatus] = useState<Status>("idle");
@@ -38,7 +40,8 @@ export default function Home() {
         body: JSON.stringify({
           apiKey: apiKey.trim(),
           script: script.trim(),
-          model: model.trim()
+          model: model.trim(),
+          platform
         }),
       });
 
@@ -138,20 +141,59 @@ export default function Home() {
       <div className="flex-1 flex flex-col lg:flex-row min-h-0">
         {/* Left Panel — Input */}
         <div className="w-full lg:w-[480px] flex flex-col border-r border-border bg-surface">
-          {/* API Key & Model */}
+          {/* Platform & API Key & Model */}
           <div className="px-5 py-4 border-b border-border space-y-4">
             <div>
               <label className="block text-xs font-medium text-muted mb-2 uppercase tracking-wider">
-                API Key
+                Platform
               </label>
-              <input
-                type="password"
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder="Enter your Replicate token"
-                className="w-full px-3 py-2 text-sm bg-background border border-border rounded-md focus:border-foreground focus:ring-1 focus:ring-foreground/10 placeholder:text-muted/50"
-              />
+              <div className="flex gap-2">
+                <button
+                  onClick={() => { setPlatform("replicate"); setModel("pixverse/pixverse-v6"); }}
+                  className={`flex-1 px-3 py-2 text-xs font-medium border rounded-md transition-all ${platform === "replicate" ? "bg-accent text-accent-foreground border-accent" : "bg-background text-muted border-border hover:border-foreground/30"}`}
+                >
+                  Replicate
+                </button>
+                <button
+                  onClick={() => { setPlatform("magic-hour"); setModel("N/A"); }}
+                  className={`flex-1 px-3 py-2 text-xs font-medium border rounded-md transition-all ${platform === "magic-hour" ? "bg-accent text-accent-foreground border-accent" : "bg-background text-muted border-border hover:border-foreground/30"}`}
+                >
+                  Magic Hour
+                </button>
+              </div>
             </div>
+            <div>
+              <label className="block text-xs font-medium text-muted mb-2 uppercase tracking-wider">
+                API Token
+              </label>
+              <div className="relative">
+                <input
+                  type={showApiKey ? "text" : "password"}
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  placeholder={platform === "replicate" ? "Enter Replicate token" : "Enter Magic Hour token"}
+                  className="w-full px-3 py-2 text-sm bg-background border border-border rounded-md focus:border-foreground focus:ring-1 focus:ring-foreground/10 placeholder:text-muted/50 pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowApiKey(!showApiKey)}
+                  className="absolute inset-y-0 right-0 pr-3 flex items-center text-muted hover:text-foreground cursor-pointer"
+                >
+                  {showApiKey ? (
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
+                      <line x1="1" y1="1" x2="23" y2="23" />
+                    </svg>
+                  ) : (
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                      <circle cx="12" cy="12" r="3" />
+                    </svg>
+                  )}
+                </button>
+              </div>
+            </div>
+
             <div>
               <label className="block text-xs font-medium text-muted mb-2 uppercase tracking-wider">
                 Model Name
@@ -159,9 +201,10 @@ export default function Home() {
               <input
                 type="text"
                 value={model}
+                disabled={platform === "magic-hour"}
                 onChange={(e) => setModel(e.target.value)}
-                placeholder="e.g. pixverse/pixverse-v6"
-                className="w-full px-3 py-2 text-sm bg-background border border-border rounded-md focus:border-foreground focus:ring-1 focus:ring-foreground/10 placeholder:text-muted/50"
+                placeholder={platform === "replicate" ? "e.g. pixverse/pixverse-v6" : "Default"}
+                className={`w-full px-3 py-2 text-sm bg-background border border-border rounded-md focus:border-foreground focus:ring-1 focus:ring-foreground/10 placeholder:text-muted/50 ${platform === "magic-hour" ? "opacity-30 cursor-not-allowed" : ""}`}
               />
             </div>
           </div>

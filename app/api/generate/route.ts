@@ -1,57 +1,64 @@
 import { NextRequest, NextResponse } from "next/server";
 import Replicate from "replicate";
+import MagicHour from "magic-hour";
 
 /**
  * POST /api/generate
  * 
- * Proxies requests to Replicate using the official SDK.
+ * Proxies requests to either Replicate or Magic Hour based on user selection.
  */
 
 export async function POST(req: NextRequest) {
     try {
         const body = await req.json();
-        const { apiKey, script, model, poll, taskId } = body;
+        const { apiKey, script, model, platform, poll, taskId } = body;
 
         if (!apiKey) {
             return NextResponse.json({ error: "API key is required." }, { status: 400 });
         }
 
-        const replicate = new Replicate({
-            auth: apiKey,
-        });
+        // --- MAGIC HOUR PLATFORM ---
+        if (platform === "magic-hour") {
+            const client = new MagicHour({ token: apiKey });
 
-        // --- Polling/Retrieval mode ---
+            if (poll && taskId) {
+                const prediction = await client.v1.textToVideo.get(taskId);
+                if (prediction.status === "completed" && prediction.videoUrl) {
+                    return NextResponse.json({ videoUrl: prediction.videoUrl, status: "completed" });
+                }
+                if (prediction.status === "failed") {
+                    return NextResponse.json({ error: "Magic Hour generation failed.", status: "failed" });
+                }
+                return NextResponse.json({ status: prediction.status, taskId: prediction.id });
+            }
+
+            // Create
+            const res = await client.v1.textToVideo.generate({
+                style: { prompt: script },
+                endSeconds: 15,
+            });
+            return NextResponse.json({ taskId: res.id, status: res.status });
+        }
+
+        // --- REPLICATE PLATFORM (Default) ---
+        const replicate = new Replicate({ auth: apiKey });
+
         if (poll && taskId) {
             const prediction = await replicate.predictions.get(taskId);
-
             if (prediction.status === "succeeded") {
                 return NextResponse.json({
                     videoUrl: Array.isArray(prediction.output) ? prediction.output[0] : prediction.output,
                     status: "completed"
                 });
             }
-
             if (prediction.status === "failed" || prediction.status === "canceled") {
-                return NextResponse.json({
-                    error: prediction.error || "Prediction failed.",
-                    status: "failed",
-                });
+                return NextResponse.json({ error: prediction.error || "Replicate failed.", status: "failed" });
             }
-
-            return NextResponse.json({
-                status: prediction.status,
-                taskId: prediction.id,
-            });
+            return NextResponse.json({ status: prediction.status, taskId: prediction.id });
         }
 
-        // --- Create prediction mode ---
-        if (!script) {
-            return NextResponse.json({ error: "Script is required." }, { status: 400 });
-        }
-
+        // Create
         const targetModel = model || "pixverse/pixverse-v6";
-
-        // Start prediction
         const prediction = await replicate.predictions.create({
             model: targetModel,
             input: {
@@ -63,15 +70,8 @@ export async function POST(req: NextRequest) {
             },
         });
 
-        if (prediction.error) {
-            return NextResponse.json({ error: prediction.error }, { status: 500 });
-        }
-
-        // Return task ID for polling
-        return NextResponse.json({
-            taskId: prediction.id,
-            status: prediction.status,
-        });
+        if (prediction.error) return NextResponse.json({ error: prediction.error }, { status: 500 });
+        return NextResponse.json({ taskId: prediction.id, status: prediction.status });
 
     } catch (err: unknown) {
         const message = err instanceof Error ? err.message : "Internal server error";
