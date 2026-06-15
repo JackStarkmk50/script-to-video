@@ -196,7 +196,7 @@ export default function Home() {
           >
             Recents
           </button>
-          <a href="/info" className="px-3 py-1.5 text-xs font-medium text-muted rounded-md hover:text-foreground">
+          <a href="/info" className="px-3 py-1.5 text-xs font-medium text-muted rounded-md hover:text-foreground transition-all">
             Info
           </a>
         </nav>
