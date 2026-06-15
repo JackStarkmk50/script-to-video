@@ -1,24 +1,38 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 
 type Status = "idle" | "generating" | "done" | "error";
 
+interface HistoryItem {
+  taskId: string;
+  prompt: string;
+  videoUrl: string;
+  filename: string;
+  timestamp: number;
+}
+
 export default function Home() {
-  const [apiKey, setApiKey] = useState("");
-  const [showApiKey, setShowApiKey] = useState(false);
-  const [platform, setPlatform] = useState<"replicate" | "magic-hour">("replicate");
-  const [model, setModel] = useState("pixverse/pixverse-v6");
+  const [comfyUrl, setComfyUrl] = useState("http://127.0.0.1:8188");
+  const [frames, setFrames] = useState(108);
+  const [aspectRatio, setAspectRatio] = useState<"landscape" | "portrait">("landscape");
   const [script, setScript] = useState("");
   const [status, setStatus] = useState<Status>("idle");
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState("");
+  const [tab, setTab] = useState<"generator" | "recents">("generator");
+  
+  // History states
+  const [historyItems, setHistoryItems] = useState<HistoryItem[]>([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+
   const videoRef = useRef<HTMLVideoElement>(null);
 
   const handleGenerate = async () => {
-    if (!apiKey.trim()) {
-      setError("Please enter your API key.");
+    if (!comfyUrl.trim()) {
+      setError("Please enter your Server URL.");
       setStatus("error");
       return;
     }
@@ -31,17 +45,17 @@ export default function Home() {
     setStatus("generating");
     setVideoUrl(null);
     setError(null);
-    setProgress("Sending script to API...");
+    setProgress("Submitting prompt to Server...");
 
     try {
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          apiKey: apiKey.trim(),
           script: script.trim(),
-          model: model.trim(),
-          platform
+          comfyUrl: comfyUrl.trim(),
+          frames,
+          aspectRatio,
         }),
       });
 
@@ -55,9 +69,8 @@ export default function Home() {
         setVideoUrl(data.videoUrl);
         setStatus("done");
       } else if (data.taskId) {
-        // Poll for result
-        setProgress("Video is being generated...");
-        await pollForResult(data.taskId, data.pollUrl);
+        setProgress("Queued! Waiting for Server to start rendering...");
+        await pollForResult(data.taskId);
       } else {
         throw new Error("Unexpected response from API.");
       }
@@ -68,25 +81,27 @@ export default function Home() {
     }
   };
 
-  const pollForResult = async (taskId: string, pollUrl?: string) => {
-    const maxAttempts = 120; // 10 minutes at 5s intervals
+  const pollForResult = async (taskId: string) => {
+    const maxAttempts = 180; // 15 minutes at 5s intervals
     for (let i = 0; i < maxAttempts; i++) {
       await new Promise((r) => setTimeout(r, 5000));
-      setProgress(`Generating video... (${Math.min(Math.round(((i + 1) / maxAttempts) * 100), 99)}%)`);
 
       try {
         const res = await fetch("/api/generate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            apiKey: apiKey.trim(),
             taskId,
-            pollUrl,
             poll: true,
+            comfyUrl: comfyUrl.trim(),
           }),
         });
 
         const data = await res.json();
+
+        if (!res.ok) {
+          throw new Error(data.error || "Polling request failed");
+        }
 
         if (data.status === "completed" && data.videoUrl) {
           setVideoUrl(data.videoUrl);
@@ -94,8 +109,11 @@ export default function Home() {
           return;
         } else if (data.status === "failed") {
           throw new Error(data.error || "Video generation failed.");
+        } else if (data.status === "running") {
+          setProgress(`Rendering video... (${Math.min(Math.round(((i + 1) / maxAttempts) * 100), 99)}%)`);
+        } else if (data.status === "queued") {
+          setProgress("Waiting in Server queue...");
         }
-        // Otherwise, keep polling
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : "Polling failed.";
         setError(message);
@@ -104,7 +122,7 @@ export default function Home() {
       }
     }
 
-    setError("Generation timed out. Please try again.");
+    setError("Generation timed out. Please check Server.");
     setStatus("error");
   };
 
@@ -115,10 +133,44 @@ export default function Home() {
     setProgress("");
   };
 
+  const fetchHistory = async () => {
+    if (!comfyUrl.trim()) return;
+    setLoadingHistory(true);
+    setHistoryError(null);
+    try {
+      const res = await fetch(`/api/history?comfyUrl=${encodeURIComponent(comfyUrl.trim())}`);
+      if (!res.ok) {
+        throw new Error("Failed to retrieve server history.");
+      }
+      const data = await res.json();
+      setHistoryItems(data.items || []);
+    } catch (err: any) {
+      setHistoryError(err.message || "Failed to load recent history.");
+    } finally {
+      setLoadingHistory(false);
+    }
+  };
+
+  useEffect(() => {
+    if (tab === "recents") {
+      fetchHistory();
+    }
+  }, [tab]);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const tabParam = params.get("tab");
+      if (tabParam === "recents") {
+        setTab("recents");
+      }
+    }
+  }, []);
+
   return (
-    <div className="h-full flex flex-col">
+    <div className="h-full flex flex-col bg-background text-foreground">
       {/* Header */}
-      <header className="flex items-center justify-between px-6 py-4 border-b border-border">
+      <header className="flex items-center justify-between px-6 py-4 border-b border-border bg-surface">
         <div className="flex items-center gap-2">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <polygon points="23 7 16 12 23 17 23 7" />
@@ -127,209 +179,304 @@ export default function Home() {
           <h1 className="text-sm font-semibold tracking-tight">TTV</h1>
           <span className="text-xs text-muted ml-1">Script to Video</span>
         </div>
-        <nav className="flex items-center gap-1">
-          <a href="/" className="px-3 py-1.5 text-xs font-medium text-foreground bg-foreground/5 rounded-md">
+        <nav className="flex items-center gap-1 bg-background/50 p-0.5 rounded-lg border border-border">
+          <button
+            onClick={() => setTab("generator")}
+            className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
+              tab === "generator" ? "bg-accent text-accent-foreground shadow-sm" : "text-muted hover:text-foreground"
+            }`}
+          >
             Generator
-          </a>
-          <a href="/info" className="px-3 py-1.5 text-xs font-medium text-muted rounded-md hover:text-foreground hover:bg-foreground/5">
+          </button>
+          <button
+            onClick={() => setTab("recents")}
+            className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
+              tab === "recents" ? "bg-accent text-accent-foreground shadow-sm" : "text-muted hover:text-foreground"
+            }`}
+          >
+            Recents
+          </button>
+          <a href="/info" className="px-3 py-1.5 text-xs font-medium text-muted rounded-md hover:text-foreground">
             Info
           </a>
         </nav>
       </header>
 
-      {/* Main Content */}
-      <div className="flex-1 flex flex-col lg:flex-row min-h-0">
-        {/* Left Panel — Input */}
-        <div className="w-full lg:w-[480px] flex flex-col border-r border-border bg-surface">
-          {/* Platform & API Key & Model */}
-          <div className="px-5 py-4 border-b border-border space-y-4">
-            <div>
-              <label className="block text-xs font-medium text-muted mb-2 uppercase tracking-wider">
-                Platform
-              </label>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => { setPlatform("replicate"); setModel("pixverse/pixverse-v6"); }}
-                  className={`flex-1 px-3 py-2 text-xs font-medium border rounded-md transition-all ${platform === "replicate" ? "bg-accent text-accent-foreground border-accent" : "bg-background text-muted border-border hover:border-foreground/30"}`}
-                >
-                  Replicate
-                </button>
-                <button
-                  onClick={() => { setPlatform("magic-hour"); setModel("N/A"); }}
-                  className={`flex-1 px-3 py-2 text-xs font-medium border rounded-md transition-all ${platform === "magic-hour" ? "bg-accent text-accent-foreground border-accent" : "bg-background text-muted border-border hover:border-foreground/30"}`}
-                >
-                  Magic Hour
-                </button>
-              </div>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-muted mb-2 uppercase tracking-wider">
-                API Token
-              </label>
-              <div className="relative">
+      {tab === "generator" ? (
+        /* Generator Tab */
+        <div className="flex-1 flex flex-col lg:flex-row min-h-0">
+          {/* Left Panel — Input */}
+          <div className="w-full lg:w-[480px] flex flex-col border-r border-border bg-surface">
+            {/* Server URL & Settings */}
+            <div className="px-5 py-4 border-b border-border space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-muted mb-2 uppercase tracking-wider">
+                  Server URL
+                </label>
                 <input
-                  type={showApiKey ? "text" : "password"}
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  placeholder={platform === "replicate" ? "Enter Replicate token" : "Enter Magic Hour token"}
-                  className="w-full px-3 py-2 text-sm bg-background border border-border rounded-md focus:border-foreground focus:ring-1 focus:ring-foreground/10 placeholder:text-muted/50 pr-10"
+                  type="text"
+                  value={comfyUrl}
+                  onChange={(e) => setComfyUrl(e.target.value)}
+                  placeholder="e.g. https://xxxx.ngrok-free.app"
+                  className="w-full px-3 py-2 text-sm bg-background border border-border rounded-md focus:border-foreground focus:ring-1 focus:ring-foreground/10 placeholder:text-muted/50"
                 />
-                <button
-                  type="button"
-                  onClick={() => setShowApiKey(!showApiKey)}
-                  className="absolute inset-y-0 right-0 pr-3 flex items-center text-muted hover:text-foreground cursor-pointer"
-                >
-                  {showApiKey ? (
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
-                      <line x1="1" y1="1" x2="23" y2="23" />
-                    </svg>
-                  ) : (
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                      <circle cx="12" cy="12" r="3" />
-                    </svg>
-                  )}
-                </button>
+                <p className="text-xs text-muted mt-1.5">
+                  Enter your Server address or ngrok tunnel URL.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-muted mb-2 uppercase tracking-wider">
+                  Frames
+                </label>
+                <input
+                  type="number"
+                  value={frames}
+                  onChange={(e) => setFrames(Math.max(1, parseInt(e.target.value) || 108))}
+                  min={1}
+                  className="w-full px-3 py-2 text-sm bg-background border border-border rounded-md focus:border-foreground focus:ring-1 focus:ring-foreground/10"
+                />
+                <p className="text-xs text-muted mt-1.5">
+                  Number of frames to generate. At 24 fps: 108 ≈ 4.5s, 240 ≈ 10s
+                </p>
+              </div>
+
+              <div>
+                <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={aspectRatio === "portrait"}
+                    onChange={(e) => setAspectRatio(e.target.checked ? "portrait" : "landscape")}
+                    className="h-4 w-4 rounded border-border text-foreground focus:ring-foreground/20 bg-background accent-accent"
+                  />
+                  <span className="text-xs font-medium text-muted uppercase tracking-wider">
+                    Generate Portrait (9:16)
+                  </span>
+                </label>
+                <p className="text-xs text-muted mt-1.5">
+                  Checked: 720x1280 (Portrait). Unchecked: 1280x720 (Landscape).
+                </p>
               </div>
             </div>
 
-            <div>
+            {/* Script Input */}
+            <div className="flex-1 flex flex-col px-5 py-4 min-h-0">
               <label className="block text-xs font-medium text-muted mb-2 uppercase tracking-wider">
-                Model Name
+                Script / Prompt
               </label>
-              <input
-                type="text"
-                value={model}
-                disabled={platform === "magic-hour"}
-                onChange={(e) => setModel(e.target.value)}
-                placeholder={platform === "replicate" ? "e.g. pixverse/pixverse-v6" : "Default"}
-                className={`w-full px-3 py-2 text-sm bg-background border border-border rounded-md focus:border-foreground focus:ring-1 focus:ring-foreground/10 placeholder:text-muted/50 ${platform === "magic-hour" ? "opacity-30 cursor-not-allowed" : ""}`}
+              <textarea
+                value={script}
+                onChange={(e) => setScript(e.target.value)}
+                placeholder={"Describe the scene in detail...\n\nExample: A cinematic close-up of a futuristic street performer playing a glowing neon violin at night in a rainy cyberpunk city.\n\n[SOUND]\nsoft violin music, cinematic ambient city rain"}
+                className="flex-1 w-full px-3 py-3 text-sm font-mono leading-relaxed bg-background border border-border rounded-md resize-none focus:border-foreground focus:ring-1 focus:ring-foreground/10 placeholder:text-muted/40 min-h-[200px]"
               />
             </div>
+
+            {/* Actions */}
+            <div className="px-5 py-4 border-t border-border flex items-center gap-3">
+              <button
+                onClick={handleGenerate}
+                disabled={status === "generating"}
+                className="flex-1 px-4 py-2.5 text-sm font-medium bg-accent text-accent-foreground rounded-md hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+              >
+                {status === "generating" ? (
+                  <span className="flex items-center justify-center gap-2">
+                    <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    Rendering...
+                  </span>
+                ) : (
+                  "Generate Video"
+                )}
+              </button>
+              {(status === "done" || status === "error") && (
+                <button
+                  onClick={handleReset}
+                  className="px-4 py-2.5 text-sm font-medium border border-border rounded-md hover:bg-background cursor-pointer"
+                >
+                  Reset
+                </button>
+              )}
+            </div>
+
+            {/* Character count */}
+            <div className="px-5 pb-3">
+              <span className="text-xs text-muted font-mono">
+                {script.length} characters
+              </span>
+            </div>
           </div>
 
-          {/* Script Input */}
-          <div className="flex-1 flex flex-col px-5 py-4 min-h-0">
-            <label className="block text-xs font-medium text-muted mb-2 uppercase tracking-wider">
-              Script
-            </label>
-            <textarea
-              value={script}
-              onChange={(e) => setScript(e.target.value)}
-              placeholder="Write your video script here...&#10;&#10;Describe the scene, narration, characters, mood, and any visual details you want in the generated video."
-              className="flex-1 w-full px-3 py-3 text-sm font-mono leading-relaxed bg-background border border-border rounded-md resize-none focus:border-foreground focus:ring-1 focus:ring-foreground/10 placeholder:text-muted/40 min-h-[200px]"
-            />
-          </div>
+          {/* Right Panel — Output */}
+          <div className="flex-1 flex items-center justify-center bg-background p-6 min-h-[300px]">
+            {status === "idle" && (
+              <div className="text-center max-w-sm">
+                <div className="w-16 h-16 mx-auto mb-4 rounded-full border-2 border-dashed border-border flex items-center justify-center">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-muted">
+                    <polygon points="5 3 19 12 5 21 5 3" />
+                  </svg>
+                </div>
+                <p className="text-sm text-muted">
+                  Write your prompt and click Generate Video.
+                </p>
+              </div>
+            )}
 
-          {/* Actions */}
-          <div className="px-5 py-4 border-t border-border flex items-center gap-3">
-            <button
-              onClick={handleGenerate}
-              disabled={status === "generating"}
-              className="flex-1 px-4 py-2.5 text-sm font-medium bg-accent text-accent-foreground rounded-md hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-            >
-              {status === "generating" ? (
-                <span className="flex items-center justify-center gap-2">
-                  <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+            {status === "generating" && (
+              <div className="text-center max-w-sm">
+                <div className="w-16 h-16 mx-auto mb-4 rounded-full border-2 border-foreground/20 flex items-center justify-center">
+                  <svg className="animate-spin h-6 w-6 text-foreground" viewBox="0 0 24 24" fill="none">
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                   </svg>
-                  Generating...
-                </span>
-              ) : (
-                "Generate Video"
-              )}
-            </button>
-            {(status === "done" || status === "error") && (
-              <button
-                onClick={handleReset}
-                className="px-4 py-2.5 text-sm font-medium border border-border rounded-md hover:bg-background cursor-pointer"
-              >
-                Reset
-              </button>
+                </div>
+                <p className="text-sm font-medium mb-1">{progress}</p>
+                <p className="text-xs text-muted">
+                  Your GPU is processing the LTX-2 workflow.
+                </p>
+              </div>
+            )}
+
+            {status === "done" && videoUrl && (
+              <div className={`w-full flex flex-col items-center justify-center ${aspectRatio === "portrait" ? "max-w-[360px]" : "max-w-4xl"}`}>
+                <div className="relative w-full rounded-lg border border-border shadow-lg overflow-hidden bg-black aspect-video flex items-center justify-center" style={{ aspectRatio: aspectRatio === "portrait" ? "9/16" : "16/9" }}>
+                  <video
+                    ref={videoRef}
+                    src={`/api/video?url=${encodeURIComponent(videoUrl)}`}
+                    controls
+                    autoPlay
+                    className="w-full h-full object-contain"
+                  >
+                    Your browser does not support the video tag.
+                  </video>
+                </div>
+                <div className="w-full flex items-center justify-between mt-3 px-1">
+                  <p className="text-xs text-muted">Rendered ({aspectRatio === "portrait" ? "720x1280" : "1280x720"})</p>
+                  <div className="flex items-center gap-4">
+                    <button
+                      onClick={() => videoRef.current?.requestFullscreen()}
+                      className="text-xs font-medium text-foreground hover:underline flex items-center gap-1"
+                    >
+                      Full Screen ⛶
+                    </button>
+                    <a
+                      href={`/api/download?url=${encodeURIComponent(videoUrl)}`}
+                      download
+                      className="text-xs font-medium text-foreground hover:underline"
+                    >
+                      Download ↓
+                    </a>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {status === "error" && (
+              <div className="text-center max-w-sm">
+                <div className="w-16 h-16 mx-auto mb-4 rounded-full border-2 border-red-200 bg-red-50 flex items-center justify-center">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-red-500">
+                    <circle cx="12" cy="12" r="10" />
+                    <line x1="15" y1="9" x2="9" y2="15" />
+                    <line x1="9" y1="9" x2="15" y2="15" />
+                  </svg>
+                </div>
+                <p className="text-sm font-medium text-red-600 mb-1">Generation Failed</p>
+                <p className="text-xs text-muted">{error}</p>
+              </div>
             )}
           </div>
-
-          {/* Character count */}
-          <div className="px-5 pb-3">
-            <span className="text-xs text-muted font-mono">
-              {script.length} characters
-            </span>
-          </div>
         </div>
-
-        {/* Right Panel — Output */}
-        <div className="flex-1 flex items-center justify-center bg-background p-6 min-h-[300px]">
-          {status === "idle" && (
-            <div className="text-center max-w-sm">
-              <div className="w-16 h-16 mx-auto mb-4 rounded-full border-2 border-dashed border-border flex items-center justify-center">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-muted">
-                  <polygon points="5 3 19 12 5 21 5 3" />
-                </svg>
+      ) : (
+        /* Recents Tab */
+        <div className="flex-1 overflow-y-auto p-6 bg-background">
+          <div className="max-w-6xl mx-auto space-y-6">
+            <div className="flex items-center justify-between border-b border-border pb-4">
+              <div>
+                <h2 className="text-lg font-semibold tracking-tight">Recent Generations</h2>
+                <p className="text-xs text-muted">All past videos generated from your ComfyUI Server history.</p>
               </div>
-              <p className="text-sm text-muted">
-                Write a script and click Generate to create your video.
-              </p>
+              <button
+                onClick={fetchHistory}
+                disabled={loadingHistory}
+                className="px-3 py-1.5 text-xs font-medium bg-accent text-accent-foreground rounded-md hover:opacity-90 disabled:opacity-50 cursor-pointer"
+              >
+                {loadingHistory ? "Refreshing..." : "Refresh History"}
+              </button>
             </div>
-          )}
 
-          {status === "generating" && (
-            <div className="text-center max-w-sm">
-              <div className="w-16 h-16 mx-auto mb-4 rounded-full border-2 border-foreground/20 flex items-center justify-center">
+            {loadingHistory && (
+              <div className="flex flex-col items-center justify-center py-20 space-y-3">
                 <svg className="animate-spin h-6 w-6 text-foreground" viewBox="0 0 24 24" fill="none">
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                 </svg>
+                <p className="text-sm text-muted">Retrieving history from server...</p>
               </div>
-              <p className="text-sm font-medium mb-1">{progress}</p>
-              <p className="text-xs text-muted">
-                This may take a few minutes depending on the model.
-              </p>
-            </div>
-          )}
+            )}
 
-          {status === "done" && videoUrl && (
-            <div className="w-full max-w-2xl">
-              <video
-                ref={videoRef}
-                src={videoUrl}
-                controls
-                autoPlay
-                className="w-full rounded-lg border border-border shadow-sm"
-              >
-                Your browser does not support the video tag.
-              </video>
-              <div className="flex items-center justify-between mt-3">
-                <p className="text-xs text-muted">Video generated successfully</p>
-                <a
-                  href={videoUrl}
-                  download
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-xs font-medium text-foreground hover:underline"
+            {!loadingHistory && historyError && (
+              <div className="text-center py-20 border border-border border-dashed rounded-lg bg-surface">
+                <p className="text-sm text-red-500 font-medium mb-1">Failed to fetch history</p>
+                <p className="text-xs text-muted mb-4">{historyError}</p>
+                <button
+                  onClick={fetchHistory}
+                  className="px-4 py-2 text-xs font-medium bg-foreground text-background rounded-md hover:opacity-90"
                 >
-                  Download ↓
-                </a>
+                  Try Again
+                </button>
               </div>
-            </div>
-          )}
+            )}
 
-          {status === "error" && (
-            <div className="text-center max-w-sm">
-              <div className="w-16 h-16 mx-auto mb-4 rounded-full border-2 border-red-200 bg-red-50 flex items-center justify-center">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-red-500">
-                  <circle cx="12" cy="12" r="10" />
-                  <line x1="15" y1="9" x2="9" y2="15" />
-                  <line x1="9" y1="9" x2="15" y2="15" />
-                </svg>
+            {!loadingHistory && !historyError && historyItems.length === 0 && (
+              <div className="text-center py-20 border border-border border-dashed rounded-lg bg-surface">
+                <p className="text-sm text-muted mb-1">No videos found</p>
+                <p className="text-xs text-muted">Generate a video first, or make sure your server is running and accessible.</p>
               </div>
-              <p className="text-sm font-medium text-red-600 mb-1">Generation Failed</p>
-              <p className="text-xs text-muted">{error}</p>
-            </div>
-          )}
+            )}
+
+            {!loadingHistory && !historyError && historyItems.length > 0 && (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {historyItems.map((item) => (
+                  <div key={item.taskId} className="bg-surface rounded-lg border border-border shadow-sm flex flex-col overflow-hidden group">
+                    <div className="relative aspect-video w-full bg-black flex items-center justify-center">
+                      <video
+                        src={`/api/video?url=${encodeURIComponent(item.videoUrl)}`}
+                        controls
+                        preload="metadata"
+                        className="w-full h-full object-contain"
+                      />
+                    </div>
+                    <div className="p-4 flex-1 flex flex-col justify-between space-y-4">
+                      <div className="space-y-1.5">
+                        <p className="text-xs font-mono text-muted">
+                          {new Date(item.timestamp).toLocaleString()}
+                        </p>
+                        <p className="text-sm text-foreground line-clamp-3 font-medium leading-relaxed font-sans" title={item.prompt}>
+                          {item.prompt || "No prompt text found"}
+                        </p>
+                      </div>
+                      <div className="flex items-center justify-between pt-2 border-t border-border/50">
+                        <span className="text-[10px] font-mono text-muted truncate max-w-[150px]">
+                          {item.filename}
+                        </span>
+                        <a
+                          href={`/api/download?url=${encodeURIComponent(item.videoUrl)}`}
+                          download
+                          className="px-2.5 py-1 text-xs font-medium bg-accent text-accent-foreground rounded hover:opacity-90 transition-opacity"
+                        >
+                          Download ↓
+                        </a>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

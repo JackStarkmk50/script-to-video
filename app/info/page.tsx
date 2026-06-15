@@ -11,9 +11,12 @@ export default function InfoPage() {
                     <h1 className="text-sm font-semibold tracking-tight">TTV</h1>
                     <span className="text-xs text-muted ml-1">Script to Video</span>
                 </div>
-                <nav className="flex items-center gap-1">
+                <nav className="flex items-center gap-1 bg-background/50 p-0.5 rounded-lg border border-border">
                     <a href="/" className="px-3 py-1.5 text-xs font-medium text-muted rounded-md hover:text-foreground hover:bg-foreground/5">
                         Generator
+                    </a>
+                    <a href="/?tab=recents" className="px-3 py-1.5 text-xs font-medium text-muted rounded-md hover:text-foreground hover:bg-foreground/5">
+                        Recents
                     </a>
                     <a href="/info" className="px-3 py-1.5 text-xs font-medium text-foreground bg-foreground/5 rounded-md">
                         Info
